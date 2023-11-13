@@ -191,6 +191,7 @@ class RealESRGANModel(SRGANModel):
         self.is_train = True
 
     def optimize_parameters(self, current_iter):
+        # print("!!!!!!!!!!!!!!!!!arrive here !!!!!!!!!!!")
         # usm sharpening
         l1_gt = self.gt_usm
         percep_gt = self.gt_usm
@@ -214,8 +215,19 @@ class RealESRGANModel(SRGANModel):
         l_g_total = 0
         loss_dict = OrderedDict()
         if (current_iter % self.net_d_iters == 0 and current_iter > self.net_d_init_iters):
+            if self.cri_mse:
+                l_g_mse = self.cri_mse(self.output, l1_gt)
+                l_g_total += l_g_mse
+                loss_dict['l_g_mse'] = l_g_mse
+            # symmetric loss
+            if self.cri_symmetric:
+                print("!!!!!!!!!!!!!update symmetric!!!!!!!!!!!")
+                l_g_symmetric = self.cri_symmetric(self.output)
+                l_g_total += l_g_symmetric
+                loss_dict['l_g_symmetric'] = l_g_symmetric
             # pixel loss
             if self.cri_pix:
+                print("!!!!!!!!!!!!!update pixel!!!!!!!!!!!")
                 l_g_pix = self.cri_pix(self.output, l1_gt)
                 l_g_total += l_g_pix
                 loss_dict['l_g_pix'] = l_g_pix
@@ -241,6 +253,8 @@ class RealESRGANModel(SRGANModel):
 
             l_g_total.backward()
             self.optimizer_g.step()
+
+        # print("!!!!!!!!!!!!!!!!!!!loss dict: ", loss_dict)
 
         # optimize net_d
         for p in self.net_d.parameters():

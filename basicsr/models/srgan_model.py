@@ -46,6 +46,38 @@ class SRGANModel(SRModel):
         self.net_d.train()
 
         # define losses
+
+        ############ define symmetric loss #################
+        if train_opt.get('symmetric_opt'):
+            self.cri_symmetric = build_loss(train_opt['symmetric_opt']).to(self.device)
+        else:
+            self.cri_symmetric = None
+
+        if train_opt.get('symmetric_opt_1'):
+            self.cri_symmetric_1 = build_loss(train_opt['symmetric_opt_1']).to(self.device)
+        else:
+            self.cri_symmetric_1 = None
+        
+        if train_opt.get('symmetric_opt_2'):
+            self.cri_symmetric_2 = build_loss(train_opt['symmetric_opt_2']).to(self.device)
+        else:
+            self.cri_symmetric_2 = None
+
+        if train_opt.get('pearson_opt'):
+            self.cri_pearson = build_loss(train_opt['pearson_opt']).to(self.device)
+        else:
+            self.cri_pearson = None
+        
+        if train_opt.get("symmetric_peaks_opt"):
+            self.cri_symmetry_peaks = build_loss(train_opt["symmetric_peaks_opt"]).to(self.device)
+        else:
+            self.cri_symmetry_peaks = None
+        
+        if train_opt.get('mse_opt'):
+            self.cri_mse = build_loss(train_opt['mse_opt']).to(self.device)
+        else:
+            self.cri_mse = None
+
         if train_opt.get('pixel_opt'):
             self.cri_pix = build_loss(train_opt['pixel_opt']).to(self.device)
         else:
@@ -93,6 +125,12 @@ class SRGANModel(SRModel):
         l_g_total = 0
         loss_dict = OrderedDict()
         if (current_iter % self.net_d_iters == 0 and current_iter > self.net_d_init_iters):
+            # symmetric loss
+            if self.cri_symmetric:
+                print("!!!!!!!!!!!!!update symmetric!!!!!!!!!!!")
+                l_g_symmetric = self.cri_symmetric(self.output)
+                l_g_total += l_g_symmetric
+                loss_dict['l_g_symmetric'] = l_g_symmetric
             # pixel loss
             if self.cri_pix:
                 l_g_pix = self.cri_pix(self.output, self.gt)

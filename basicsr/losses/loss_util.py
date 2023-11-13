@@ -15,6 +15,7 @@ def reduce_loss(loss, reduction):
     """
     reduction_enum = F._Reduction.get_enum(reduction)
     # none: 0, elementwise_mean:1, sum: 2
+    print("***************************** reduction loss: ", loss.mean())
     if reduction_enum == 0:
         return loss
     elif reduction_enum == 1:
@@ -90,6 +91,7 @@ def weighted_loss(loss_func):
     def wrapper(pred, target, weight=None, reduction='mean', **kwargs):
         # get element-wise loss
         loss = loss_func(pred, target, **kwargs)
+        # print("********** wrapper loss: ", loss)
         loss = weight_reduce_loss(loss, weight, reduction)
         return loss
 

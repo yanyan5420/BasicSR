@@ -84,6 +84,7 @@ class GANLoss(nn.Module):
         if self.gan_type in ['wgan', 'wgan_softplus']:
             return target_is_real
         target_val = (self.real_label_val if target_is_real else self.fake_label_val)
+        # print("******************* target_val: ", target_val)
         return input.new_ones(input.size()) * target_val
 
     def forward(self, input, target_is_real, is_disc=False):
@@ -106,7 +107,9 @@ class GANLoss(nn.Module):
             else:  # for generators in hinge-gan
                 loss = -input.mean()
         else:  # other gan types
+            # print("************************************ gan loss:", input, target_label)
             loss = self.loss(input, target_label)
+            # print("************************* loss: ", loss)
 
         # loss_weight is always 1.0 for discriminators
         return loss if is_disc else loss * self.loss_weight

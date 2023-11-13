@@ -1,6 +1,7 @@
 import cv2
 import random
 import torch
+import numpy as np
 
 
 def mod_crop(img, scale):
@@ -51,6 +52,7 @@ def paired_random_crop(img_gts, img_lqs, gt_patch_size, scale, gt_path=None):
 
     # determine input type: Numpy array or Tensor
     input_type = 'Tensor' if torch.is_tensor(img_gts[0]) else 'Numpy'
+    # print("***************************** input type: ", input_type)
 
     if input_type == 'Tensor':
         h_lq, w_lq = img_lqs[0].size()[-2:]
@@ -58,7 +60,9 @@ def paired_random_crop(img_gts, img_lqs, gt_patch_size, scale, gt_path=None):
     else:
         h_lq, w_lq = img_lqs[0].shape[0:2]
         h_gt, w_gt = img_gts[0].shape[0:2]
+        # print("**************************** h, w: ", h_gt, w_gt) 256, 16384
     lq_patch_size = gt_patch_size // scale
+    # print("********************** lq_patch_size: ", lq_patch_size) 128
 
     if h_gt != h_lq * scale or w_gt != w_lq * scale:
         raise ValueError(f'Scale mismatches. GT ({h_gt}, {w_gt}) is not {scale}x ',
@@ -69,14 +73,42 @@ def paired_random_crop(img_gts, img_lqs, gt_patch_size, scale, gt_path=None):
                          f'Please remove {gt_path}.')
 
     # randomly choose top and left coordinates for lq patch
-    top = random.randint(0, h_lq - lq_patch_size)
-    left = random.randint(0, w_lq - lq_patch_size)
+    top = random.randint(0, h_lq - lq_patch_size)  # 128 - 128
+    left = random.randint(0, w_lq - lq_patch_size) # 8192 - 128
+
+    # # Yan: check lr sub-image is valid: np.max > 0
+    # check_valid_img_lq = [v[top:top + lq_patch_size, left:left + lq_patch_size, ...] for v in img_lqs]
+    # # print("---------------- here: ", np.max(check_valid_img_lq), np.max(check_valid_img_lq[0]))
+    # while np.max(check_valid_img_lq) <= 0:
+    #     top = random.randint(0, h_lq - lq_patch_size)  # 128 - 128
+    #     left = random.randint(0, w_lq - lq_patch_size) # 8192 - 128
+    #     check_valid_img_lq = [v[top:top + lq_patch_size, left:left + lq_patch_size, ...] for v in img_lqs]
+    #     if np.max(check_valid_img_lq) > 0:
+    #         break 
+
+
+    # Yan: check hr sub-image is valid: np.max > 0
+    top_gt, left_gt = int(top * scale), int(left * scale)
+    check_valid_img_gt = [v[top_gt:top_gt + gt_patch_size, left_gt:left_gt + gt_patch_size, ...] for v in img_gts]
+    # print("************!!!!!!! check valid img gt: ", len(check_valid_img_gt))
+    while np.max(check_valid_img_gt[0][4:-3, :]) <= 0:
+        top = random.randint(0, h_lq - lq_patch_size)  # 128 - 128
+        left = random.randint(0, w_lq - lq_patch_size) # 8192 - 128
+        top_gt, left_gt = int(top * scale), int(left * scale)
+        check_valid_img_gt = [v[top_gt:top_gt + gt_patch_size, left_gt:left_gt + gt_patch_size, ...] for v in img_gts]
+        if np.max(check_valid_img_gt[0][4:-3, :]) > 0:
+            break 
 
     # crop lq patch
     if input_type == 'Tensor':
         img_lqs = [v[:, :, top:top + lq_patch_size, left:left + lq_patch_size] for v in img_lqs]
     else:
         img_lqs = [v[top:top + lq_patch_size, left:left + lq_patch_size, ...] for v in img_lqs]
+        # if np.max(img_lqs[0]) <= 0:
+        #     print("********************* here is invalid sub-image !!!")
+        # else:
+        #     print("********************* here is invalid sub-image")
+        # print("****************************** crop img_lqs: ", len(img_lqs), img_lqs[0].shape)
 
     # crop corresponding gt patch
     top_gt, left_gt = int(top * scale), int(left * scale)
@@ -84,6 +116,12 @@ def paired_random_crop(img_gts, img_lqs, gt_patch_size, scale, gt_path=None):
         img_gts = [v[:, :, top_gt:top_gt + gt_patch_size, left_gt:left_gt + gt_patch_size] for v in img_gts]
     else:
         img_gts = [v[top_gt:top_gt + gt_patch_size, left_gt:left_gt + gt_patch_size, ...] for v in img_gts]
+        # if np.max(img_gts[0]) <= 0:
+        #     print("********************* here is invalid sub-image !!!")
+        # else:
+        #     print("********************* valid sub-image", np.max(img_gts[0]), np.max(img_lqs[0])) 
+        # print("*********************** patchs:", len(img_gts))
+
     if len(img_gts) == 1:
         img_gts = img_gts[0]
     if len(img_lqs) == 1:

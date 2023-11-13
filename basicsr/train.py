@@ -89,6 +89,8 @@ def load_resume_state(opt):
 
 
 def train_pipeline(root_path):
+
+    # print("!!!!!!! test !!!!!!!!")
     # parse options, set distributed setting, set random seed
     opt, args = parse_options(root_path, is_train=True)
     opt['root_path'] = root_path
@@ -122,6 +124,7 @@ def train_pipeline(root_path):
 
     # create model
     model = build_model(opt)
+    print("!!!!!!!!!!get model", model)
     if resume_state:  # resume training
         model.resume_training(resume_state)  # handle optimizers and schedulers
         logger.info(f"Resuming training from epoch: {resume_state['epoch']}, iter: {resume_state['iter']}.")
@@ -152,10 +155,13 @@ def train_pipeline(root_path):
     start_time = time.time()
 
     for epoch in range(start_epoch, total_epochs + 1):
+        print("-------- epoch: ", epoch)
         train_sampler.set_epoch(epoch)
         prefetcher.reset()
         train_data = prefetcher.next()
 
+        # print("!!!!!!!!!!!!!! start while loop", len(train_data))
+        i = 1
         while train_data is not None:
             data_timer.record()
 
@@ -165,8 +171,11 @@ def train_pipeline(root_path):
             # update learning rate
             model.update_learning_rate(current_iter, warmup_iter=opt['train'].get('warmup_iter', -1))
             # training
+            print("!!!!!!!!!!!!!!!!! train data is: ", train_data['gt'].shape, train_data.keys(), i)
             model.feed_data(train_data)
+            # print(">>>>>>>>>>>>>>>>>>. arive here")
             model.optimize_parameters(current_iter)
+            # print(">>>>>>>>>>>>>>>>>> optimize_param dict: ", model.optimize_parameters(current_iter))
             iter_timer.record()
             if current_iter == 1:
                 # reset start time in msg_logger for more accurate eta_time
@@ -178,6 +187,7 @@ def train_pipeline(root_path):
                 log_vars.update({'lrs': model.get_current_learning_rate()})
                 log_vars.update({'time': iter_timer.get_avg_time(), 'data_time': data_timer.get_avg_time()})
                 log_vars.update(model.get_current_log())
+                print("!!!!!!!!!!!!!!! here log dict: ", model.get_current_log())
                 msg_logger(log_vars)
 
             # save models and training states
@@ -187,14 +197,20 @@ def train_pipeline(root_path):
 
             # validation
             if opt.get('val') is not None and (current_iter % opt['val']['val_freq'] == 0):
+                print("************************ validation here ****************")
                 if len(val_loaders) > 1:
                     logger.warning('Multiple validation datasets are *only* supported by SRModel.')
                 for val_loader in val_loaders:
+                    print("******************** here ******************")
                     model.validation(val_loader, current_iter, tb_logger, opt['val']['save_img'])
 
             data_timer.start()
             iter_timer.start()
             train_data = prefetcher.next()
+            if train_data is None:
+                print("----------- here train data is none: ", i+1)
+
+            i += 1
         # end of iter
 
     # end of epoch

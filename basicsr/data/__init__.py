@@ -83,6 +83,7 @@ def build_dataloader(dataset, dataset_opt, num_gpu=1, dist=False, sampler=None, 
     dataloader_args['persistent_workers'] = dataset_opt.get('persistent_workers', False)
 
     prefetch_mode = dataset_opt.get('prefetch_mode')
+    # print("*************************** prefetch mode: ", prefetch_mode) prefetch_mode is None
     if prefetch_mode == 'cpu':  # CPUPrefetcher
         num_prefetch_queue = dataset_opt.get('num_prefetch_queue', 1)
         logger = get_root_logger()

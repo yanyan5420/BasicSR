@@ -1,6 +1,11 @@
 import torch
 from torch import nn as nn
 from torch.nn import functional as F
+import numpy as np
+from scipy.stats.stats import pearsonr
+import cv2
+from scipy.signal import find_peaks, peak_widths
+import math
 
 from basicsr.archs.vgg_arch import VGGFeatureExtractor
 from basicsr.utils.registry import LOSS_REGISTRY
@@ -22,6 +27,236 @@ def mse_loss(pred, target):
 @weighted_loss
 def charbonnier_loss(pred, target, eps=1e-12):
     return torch.sqrt((pred - target)**2 + eps)
+
+
+
+############## add symmetric loss function ####################
+
+@weighted_loss
+def symmetric_loss(pred, target):
+
+    pred_numpy = pred.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+    target_numpy = target.data.squeeze().float().cpu().clamp_(0, 1).numpy() 
+
+    loss_list = []
+    for i in range(pred_numpy.shape[0]):
+        pred_img = np.transpose(pred_numpy[i, :, :, :][[2, 1, 0], :, :], (1, 2, 0))
+        pred_img = cv2.cvtColor(pred_img, cv2.COLOR_BGR2GRAY)
+        target_img = np.transpose(target_numpy[i, :, :, :][[2, 1, 0], :, :], (1, 2, 0))
+        target_img = cv2.cvtColor(target_img, cv2.COLOR_BGR2GRAY)
+        pred_img = (pred_img * 255.0).astype(np.float32)
+        target_img = (target_img * 255.0).astype(np.float32)
+
+        corr_list = []
+        for j in range(target_img.shape[1]):
+            peaks, _ = find_peaks(target_img[4:-3, j])
+            if peaks.size != 0:
+                # print(i, peaks)
+                temp_t = pred_img[4:128, j]
+                temp_t = temp_t.astype('float32')
+                temp_b = np.flipud(pred_img[129:-3, j])
+                temp_b = temp_b.astype('float32')
+                temp_corr = pearsonr(np.log10(temp_t + 1), np.log10(temp_b + 1))[0]**2
+                corr_list.append(temp_corr)
+        
+        sym_loss = 1 - np.nanmean(corr_list)
+        loss_list.append(sym_loss)
+
+    # print("bacis loss here !!!!")
+    loss_tensor = torch.tensor(loss_list, dtype=torch.float32, device='cuda:0', requires_grad=True)
+    return loss_tensor
+
+
+@LOSS_REGISTRY.register()
+class SYMLoss(nn.Module):
+    def __init__(self, loss_weight=1.0, reduction='mean'):
+        super(SYMLoss, self).__init__()
+        if reduction not in ['none', 'mean', 'sum']:
+            raise ValueError(f'Unsupported reduction mode: {reduction}. Supported ones are: {_reduction_modes}')
+
+        self.loss_weight = loss_weight
+        self.reduction = reduction
+    
+    def forward(self, pred, target):
+        return self.loss_weight * symmetric_loss(pred, target)
+    
+
+
+# symmetry score based on peak detection
+def peak_match_sliced_profile(temp_sliced_profile, h_threshold, p_threshold, center_idx):
+    height_threshold = h_threshold
+    prominence_threshold = p_threshold
+    # center_idx = 128
+
+    peaks_1, properties_1 = find_peaks(temp_sliced_profile, height=height_threshold, prominence=prominence_threshold)
+    peak_pairs = []
+    peaks_copy = peaks_1.copy()
+
+    # Compute full widths at half maximum
+    full_widths_at_half_max, _, _, _ = peak_widths(temp_sliced_profile, peaks_1, rel_height=0.5)
+
+    if center_idx in peaks_1:
+        temp_pair = (center_idx, center_idx, properties_1['peak_heights'][np.where(peaks_1 == center_idx)[0][0]],
+                           properties_1['peak_heights'][np.where(peaks_1 == center_idx)[0][0]],
+                           full_widths_at_half_max[np.where(peaks_1 == center_idx)[0][0]] / 2,
+                           full_widths_at_half_max[np.where(peaks_1 == center_idx)[0][0]] / 2)
+        peak_pairs.append(temp_pair)
+        peaks_copy = np.delete(peaks_copy, np.where(peaks_copy == center_idx))
+
+    peaks_c = peaks_copy.copy()
+    for peak in peaks_c:
+        symmetric_pos = 2 * center_idx - peak
+        if peaks_copy.size > 0:
+            # Find the peak that's closest to the symmetric position
+            closest_peak = peaks_copy[np.argmin(np.abs(peaks_copy - symmetric_pos))]
+            # print(closest_peak, symmetric_pos)
+            # (peak_1_pos, peak_2_pos, peak_1_height, peak_2_height, peak_1_hwhh, peak_2_hwhh)
+            temp_pair = (peak, closest_peak, properties_1['peak_heights'][np.where(peaks_1 == peak)[0][0]],
+                               properties_1['peak_heights'][np.where(peaks_1 == closest_peak)[0][0]],
+                               full_widths_at_half_max[np.where(peaks_1 == peak)[0][0]] / 2,
+                               full_widths_at_half_max[np.where(peaks_1 == closest_peak)[0][0]] / 2)
+            peak_pairs.append(temp_pair)
+            peaks_copy = peaks_copy[peaks_copy != peak]
+            peaks_copy = peaks_copy[peaks_copy != closest_peak]
+
+    # print(peak_pairs)
+    # Remove duplicates (pairs that were added twice)
+    peak_pairs = list(set(tuple(pair) for pair in peak_pairs))
+
+    # Second round of peak finding with updated threshold
+    for pair in peak_pairs:
+        # print(pair)
+        if pair[0] == pair[1] and pair[0] != center_idx:
+            peaks_2, properties_2 = find_peaks(temp_sliced_profile, height=height_threshold)
+            symmetric_pos = 2 * center_idx - pair[0]
+            if peaks_2.size > 0:
+                # Find the peak that's closest to the symmetric position
+                closest_peak = peaks_2[np.argmin(np.abs(peaks_2 - symmetric_pos))]
+                # print(closest_peak, symmetric_pos)
+                if np.abs(closest_peak - symmetric_pos) <= 1:
+                    full_widths_at_half_max, _, _, _ = peak_widths(temp_sliced_profile, peaks_2, rel_height=0.5)
+                    peak_pairs.remove(pair)
+                    temp_pair = (pair[0], closest_peak,
+                                       properties_2['peak_heights'][np.where(peaks_2 == pair[0])[0][0]],
+                                       properties_2['peak_heights'][np.where(peaks_2 == closest_peak)[0][0]],
+                                       full_widths_at_half_max[np.where(peaks_2 == pair[0])[0][0]] / 2,
+                                       full_widths_at_half_max[np.where(peaks_2 == closest_peak)[0][0]] / 2)
+                    peak_pairs.append(temp_pair)
+
+    # Remove duplicates again (pairs that were added twice)
+    # peak_pairs = list(set(tuple(sorted(pair)) for pair in peak_pairs))
+    return peak_pairs
+
+
+def get_symmetry_score_sliced_profile(peak_pairs, center_idx):
+    pos_sym_score_list = []
+    height_sym_score_list = []
+    shape_sym_score_list = []
+
+    # center_idx = 128
+    for pair in peak_pairs:
+        idx_1, idx_2 = pair[0], pair[1]
+        height_1, height_2 = pair[2], pair[3]
+        width_1, width_2 = pair[4], pair[5]
+
+        if idx_1 == idx_2 and idx_1 == center_idx:
+            position_symmetry_score = 0
+            height_symmetry_score = 0
+            shape_symmetry_score = 0
+        elif idx_1 == idx_2 and idx_1 != center_idx:
+            position_symmetry_score = 1
+            height_symmetry_score = 1
+            shape_symmetry_score = 1
+        else:
+            if abs(idx_1 - center_idx) != 0 or abs(idx_2 - center_idx) != 0:
+                position_symmetry_score = abs(abs(idx_1 - center_idx) - abs(idx_2 - center_idx)) / \
+                                          max(abs(idx_1 - center_idx), abs(idx_2 - center_idx))
+            else:
+                position_symmetry_score = 0
+
+            height_symmetry_score = abs(height_1 - height_2) / max(height_1, height_2)
+            shape_symmetry_score = abs(width_1 - width_2) / max(width_1, width_2)
+
+        pos_sym_score_list.append(position_symmetry_score)
+        height_sym_score_list.append(height_symmetry_score)
+        shape_sym_score_list.append(shape_symmetry_score)
+
+    pos_sym_mean = np.nanmean(pos_sym_score_list)
+    height_sym_mean = np.nanmean(height_sym_score_list)
+    shape_sym_mean = np.nanmean(shape_sym_score_list)
+    return pos_sym_mean, height_sym_mean, shape_sym_mean
+
+
+def measure_symmetry(im, center_idx):
+    pos_sym_list = []
+    height_sym_list = []
+    shape_sym_list = []
+
+    for i in range(im.shape[1]):
+        temp_sliced_profile = im[:, i]
+        t_peaks, _ = find_peaks(temp_sliced_profile, height=0.072731346, prominence=1)
+        if t_peaks.size > 0:
+            # print(i)
+            temp_peak_pairs = peak_match_sliced_profile(temp_sliced_profile, 0.072731346, 1, center_idx)
+            pos_sym, height_sym, shape_sym = get_symmetry_score_sliced_profile(temp_peak_pairs, center_idx)
+            pos_sym_list.append(pos_sym)
+            height_sym_list.append(height_sym)
+            shape_sym_list.append(shape_sym)
+    
+    # print("************** symmetry peak list: ", pos_sym_list, height_sym_list, shape_sym_list)
+
+    return np.mean(pos_sym_list), np.mean(height_sym_list), np.mean(shape_sym_list)
+
+
+@weighted_loss
+def symmetric_loss_based_on_peaks(pred, target):
+    pred_numpy = pred.data.squeeze().float().cpu().clamp_(0, 1).numpy()
+    target_numpy = target.data.squeeze().float().cpu().clamp_(0, 1).numpy() 
+
+    # total_corr = []
+    final_pos_sym_list = []
+    final_height_sym_list = []
+    final_shape_sym_list = []
+    for i in range(pred_numpy.shape[0]):
+        pred_img = np.transpose(pred_numpy[i, :, :, :][[2, 1, 0], :, :], (1, 2, 0))
+        pred_img = cv2.cvtColor(pred_img, cv2.COLOR_BGR2GRAY)
+        target_img = np.transpose(target_numpy[i, :, :, :][[2, 1, 0], :, :], (1, 2, 0))
+        target_img = cv2.cvtColor(target_img, cv2.COLOR_BGR2GRAY)
+        pred_img = (pred_img * 255.0).astype(np.float32)
+        target_img = (target_img * 255.0).astype(np.float32)
+        print("************* symmetry peak shape: ", pred_img.shape, target_img.shape, np.max(pred_img), np.max(target_img))
+
+        pos_sym_loss, height_sym_loss, shape_sym_loss = measure_symmetry(pred_img, 128)
+        final_pos_sym_list.append(pos_sym_loss)
+        final_height_sym_list.append(height_sym_loss)
+        final_shape_sym_list.append(shape_sym_loss) 
+    
+    # np.nanmean(final_pos_sym_list), np.nanmean(final_height_sym_list), np.nanmean(final_shape_sym_list)
+    loss_tensor = torch.tensor(final_shape_sym_list, dtype=torch.float32, device='cuda:0', requires_grad=True)
+    return loss_tensor
+
+
+@LOSS_REGISTRY.register()
+class SYMLoss_peak_detection(nn.Module):
+    def __init__(self, loss_weight=1.0, reduction="mean"):
+        super(SYMLoss_peak_detection, self).__init__()
+        if reduction not in ['none', 'mean', 'sum']:
+            raise ValueError(f'Unsupported reduction mode: {reduction}. Supported ones are: {_reduction_modes}')
+
+        self.loss_weight = loss_weight
+        self.reduction = reduction 
+    
+    def forward(self, pred, target):
+        # pos_sym_l, height_sym_l, 
+        # shape_sym_l = symmetric_loss_based_on_peaks(pred, target)
+        # # print("***************** symmetry peak loss: ", shape_sym_l)
+        # # pos_sym_l *= self.loss_weight
+        # # height_sym_l *= self.loss_weight
+        # shape_sym_l *= self.loss_weight
+
+        return self.loss_weight * symmetric_loss_based_on_peaks(pred, target) 
+
+#################################################################      
 
 
 @LOSS_REGISTRY.register()

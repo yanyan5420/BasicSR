@@ -372,8 +372,11 @@ class BaseModel():
         Args:
             loss_dict (OrderedDict): Loss dict.
         """
+
+        # print("!!!!!!!!!!!!!!!!!arrive here !!!!!!!!!!!")
         with torch.no_grad():
             if self.opt['dist']:
+                # print("!!!!!!!!!!!!!!!!!arrive here dist !!!!!!!!!!!")
                 keys = []
                 losses = []
                 for name, value in loss_dict.items():
@@ -384,9 +387,12 @@ class BaseModel():
                 if self.opt['rank'] == 0:
                     losses /= self.opt['world_size']
                 loss_dict = {key: loss for key, loss in zip(keys, losses)}
+                # print("!!!!!!!!!!!!!!!!!!!!!!!!!here: ", loss_dict)
 
+            # print("!!!!!!!!!!!!!!!!!arrive here !!!!!!!!!!!")
             log_dict = OrderedDict()
             for name, value in loss_dict.items():
+                # print(name, value)
                 log_dict[name] = value.mean().item()
 
             return log_dict

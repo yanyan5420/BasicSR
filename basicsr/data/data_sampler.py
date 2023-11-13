@@ -35,8 +35,11 @@ class EnlargedSampler(Sampler):
         dataset_size = len(self.dataset)
         indices = [v % dataset_size for v in indices]
 
+        # print("*********************** indices: ", len(indices), max(indices))
+
         # subsample
         indices = indices[self.rank:self.total_size:self.num_replicas]
+        # print("*********************** indices: ", len(indices))
         assert len(indices) == self.num_samples
 
         return iter(indices)

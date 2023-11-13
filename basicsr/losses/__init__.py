@@ -15,6 +15,8 @@ loss_filenames = [osp.splitext(osp.basename(v))[0] for v in scandir(loss_folder)
 # import all the loss modules
 _model_modules = [importlib.import_module(f'basicsr.losses.{file_name}') for file_name in loss_filenames]
 
+print("!!!!!!!!!!! all loss modules: ", _model_modules)
+
 
 def build_loss(opt):
     """Build loss from options.
@@ -27,5 +29,6 @@ def build_loss(opt):
     loss_type = opt.pop('type')
     loss = LOSS_REGISTRY.get(loss_type)(**opt)
     logger = get_root_logger()
+    print("!!!!!!!!!!!!: ", loss.__class__.__name__)
     logger.info(f'Loss [{loss.__class__.__name__}] is created.')
     return loss
